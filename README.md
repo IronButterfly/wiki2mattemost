@@ -3,10 +3,10 @@ Python Bot to send notification about any changes on your Wikipedia page to your
 
 Please replace:  
 
-'MATTERMOST_URL'
-'MATTERMOST_TOKEN'
-'MATTERMOST_CHANNEL_ID'
-'ARTICLE_TITLE'
+'MATTERMOST_URL',
+'MATTERMOST_TOKEN',
+'MATTERMOST_CHANNEL_ID',
+'ARTICLE_TITLE' and
 'CHECK_INTERVAL'  
 
 with the appropriate values.
