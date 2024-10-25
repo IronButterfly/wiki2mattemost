@@ -1,66 +1,94 @@
 import requests
+import json
 import time
-import hashlib
-from mattermostdriver import Driver
 
-# Конфигурация Mattermost
-MATTERMOST_URL = 'your_mattermost_url'
-MATTERMOST_TOKEN = 'auth_token'
-MATTERMOST_CHANNEL_ID = 'channel_id'  # ID канала
+# Константы
+WIKIPEDIA_PAGES = {
+    "en": "Ispmanager",
+    "ru": "Ispmanager",
+    "tr": "Ispmanager",
+    # Добавьте другие языки и страницы по необходимости
+}
 
-# URL статьи на Википедии (замените 'Example' на нужную вам статью)
-ARTICLE_TITLE = 'Example'
-WIKIPEDIA_API_URL = f'https://ru.wikipedia.org/w/api.php?action=query&prop=revisions&titles={ARTICLE_TITLE}&rvprop=content&format=json'
-WIKIPEDIA_ARTICLE_URL = f'https://ru.wikipedia.org/wiki/{ARTICLE_TITLE}'
+MATTERMOST_URL = "https://mm.yourdomain.tld"
+MATTERMOST_CHANNEL_ID = "xxxxxxxxxxxxxxxxxxx"
+MATTERMOST_TOKEN = "xxxxxxxxxxxxxxxxxxx"
 
-# Время ожидания между проверками (в секундах)
-CHECK_INTERVAL = 86400  # 24 часа
+# Файлы для хранения последних версий по каждому языку
+LAST_REVISION_FILE_TEMPLATE = "last_revision_{}.json"
 
-def get_wikipedia_content(url):
+def get_wikipedia_last_revision(language, page):
+    url = f"https://{language}.wikipedia.org/w/api.php?action=query&titles={page}&prop=revisions&rvprop=timestamp|user|comment&format=json"
     response = requests.get(url)
-    if response.status_code == 200:
-        pages = response.json().get('query', {}).get('pages', {})
-        for page_id, page_info in pages.items():
-            revisions = page_info.get('revisions', [])
-            if revisions:
-                return revisions[0].get('*', '')
-    return None
+    data = response.json()
+    
+    # Извлекаем идентификатор последней редакции
+    page_id = next(iter(data['query']['pages']))
+    last_revision = data['query']['pages'][page_id]['revisions'][0]
+    return last_revision
 
-def send_mattermost_notification(driver, channel_id, message):
-    driver.posts.create_post({
-        'channel_id': channel_id,
+def load_last_revision(language):
+    file_name = LAST_REVISION_FILE_TEMPLATE.format(language)
+    try:
+        with open(file_name, 'r') as file:
+            return json.load(file)
+    except FileNotFoundError:
+        return None
+
+def save_last_revision(language, revision):
+    file_name = LAST_REVISION_FILE_TEMPLATE.format(language)
+    with open(file_name, 'w') as file:
+        json.dump(revision, file)
+
+def send_mattermost_message(message):
+    url = f"{MATTERMOST_URL}/api/v4/posts"
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': f'Bearer {MATTERMOST_TOKEN}'
+    }
+    payload = {
+        'channel_id': MATTERMOST_CHANNEL_ID,
         'message': message
-    })
+    }
+    response = requests.post(url, headers=headers, data=json.dumps(payload))
+    return response.status_code == 201
 
-def main():
-    driver = Driver({
-        'url': MATTERMOST_URL,
-        'token': MATTERMOST_TOKEN,
-        'scheme': 'https',
-        'port': 443,
-        'basepath': '/api/v4',
-        'verify': True,
-        'timeout': 30,
-        'debug': False
-    })
-
-    driver.login()
-
-    previous_hash = None
-
-    while True:
-        content = get_wikipedia_content(WIKIPEDIA_API_URL)
-        if content:
-            current_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
-            if previous_hash and current_hash != previous_hash:
-                message = f"Статья на Википедии была изменена: {WIKIPEDIA_ARTICLE_URL}"
-                send_mattermost_notification(driver, MATTERMOST_CHANNEL_ID, message)
-                print("Уведомление успешно отправлено")
-            previous_hash = current_hash
-        else:
-            print("Не удалось получить содержимое статьи")
+def check_for_updates(language, page):
+    # Получаем последнюю ревизию
+    current_revision = get_wikipedia_last_revision(language, page)
+    
+    # Загружаем сохранённую ревизию
+    last_revision = load_last_revision(language)
+    
+    # Сравниваем ревизии
+    if last_revision is None or current_revision['timestamp'] != last_revision['timestamp']:
+        # Изменения найдены
+        article_url = f"https://{language}.wikipedia.org/wiki/{page}"
+        history_url = f"https://{language}.wikipedia.org/w/index.php?title={page}&action=history"
         
-        time.sleep(CHECK_INTERVAL)
+        message = (
+            f"Страница '{page}' на языке '{language}' была изменена пользователем {current_revision['user']} "
+            f"с комментарием: {current_revision['comment']}.\n\n"
+            f"Ссылка на статью: {article_url}\n"
+            f"Ссылка на историю изменений: {history_url}"
+        )
+        
+        # Отправляем сообщение в Mattermost
+        if send_mattermost_message(message):
+            print(f"Сообщение для страницы {page} ({language}) отправлено в Mattermost.")
+            
+            # Сохраняем текущую ревизию как последнюю
+            save_last_revision(language, current_revision)
+        else:
+            print(f"Ошибка при отправке сообщения для страницы {page} ({language}) в Mattermost.")
+    else:
+        print(f"Изменений на странице {page} ({language}) нет.")
 
 if __name__ == "__main__":
-    main()
+    while True:
+        # Проверяем изменения для каждой страницы на каждом языке
+        for language, page in WIKIPEDIA_PAGES.items():
+            check_for_updates(language, page)
+        
+        # Ждем 24 часа (86400 секунд) перед следующей проверкой
+        time.sleep(86400)
